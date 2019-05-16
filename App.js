@@ -7,31 +7,49 @@
  */
 
 import React, { Component } from 'react';
-import { StyleSheet, Text, View, Alert, PermissionsAndroid, ToastAndroid } from 'react-native';
+import { StyleSheet, Text, View, Alert, PermissionsAndroid, AppState } from 'react-native';
 import DeviceInfo from 'react-native-device-info';
 import SmsAndroid from 'react-native-sms-android';
+import BackgroundJob from "react-native-background-job";
 import SocketIOClient from 'socket.io-client';
-import { ENDPOINT } from './constants';
+import { ENDPOINT, JOB_KEY, JOB_DEFAULT_SETTINGS } from './constants';
 
-// const instructions = Platform.select({
-//   ios: 'Press Cmd+R to reload,\n' + 'Cmd+D or shake for dev menu',
-//   android:
-//     'Double tap R on your keyboard to reload,\n' +
-//     'Shake or press menu button for dev menu',
-// });
+let socket = null;
+let isGranted = false;
+
+// register background service
+BackgroundJob.setGlobalWarnings(false);
+BackgroundJob.register({
+  jobKey: JOB_KEY,
+  job: () => {
+    if (isGranted && socket && socket.disconnected) {
+      socket.connect();
+    }
+  }
+});
 
 export default class App extends Component {
 
   state = {
-    socketId: null,
+    isAppActive: this.getAppIsActive(),
+    isGranted,
+    connected: false,
     deviceId: DeviceInfo.getUniqueID()
   };
 
-  socket = null;
+  restrictedMessage = `Permission to send SMS has been denied`;
+
+  handleAppStateChange = nextAppState => this.setState({ isAppActive: this.getAppIsActive(nextAppState) });
 
   componentDidMount() {
-    const socket = SocketIOClient(ENDPOINT, {
+
+    BackgroundJob.schedule(JOB_DEFAULT_SETTINGS);
+
+    AppState.addEventListener('change', this.handleAppStateChange);
+  
+    socket = SocketIOClient(ENDPOINT, {
       query: this.queryParams,
+      autoConnect: false,
       transports: ['websocket']
     });
 
@@ -39,41 +57,36 @@ export default class App extends Component {
       socket.io.opts.query = this.queryParams;
     });
 
-    socket.on('error', error => {
-      this.showAlert(error.name, JSON.stringify(err));
+    socket.on('disconnect', () => {
+
+      this.setState({ connected: false });
+      if (isGranted) {
+        socket.connect();
+      }
+  
     });
 
-    socket.on('disconnect', () => this.setState({ socketId: null }));
+    socket.on('connect', () => this.setState({ connected: true }));
 
-    socket.on('connect', () => {
+    socket.on('message', ({ n = '', m = '' } = {}) => {
+      // this.showAlert(
+      //   'Socket message received',
+      //   `Websocket received message from host ${this.host}:
+      //     n -> ${n}
+      //     m -> ${m}
+      //   `
+      // );
 
-      this.setState({ socketId: socket.id });
-
-      this.showAlert(
-        'Socket connected',
-        `Websocket been connected to ${this.host}`
-      );
-
-      socket.on('message', ({ n = '', m = '' } = {}) => {
-        // this.showAlert(
-        //   'Socket message received',
-        //   `Websocket received message from host ${this.host}:
-        //     n -> ${n}
-        //     m -> ${m}
-        //   `
-        // );
-        this.sendSMS({ n, m });
-
-      });
+      this.sendSMS({ n, m });
 
     });
 
-    this.socket = socket;
+    this.handlePermission();
 
   }
 
   componentWillUnmount() {
-    this.socket.close();
+    AppState.removeEventListener('change', this.handleAppStateChange);
   }
 
   get host() {
@@ -86,54 +99,96 @@ export default class App extends Component {
     };
   }
 
+  getAppIsActive(currentState = AppState.currentState) {
+    return currentState === 'active';
+  }
+
   showAlert(topic, message) {
     Alert.alert(topic, message);
   }
 
-  async sendSMS({ n, m }) {
-    // ToastAndroid.show(m, ToastAndroid.SHORT);
-    const send = () => {
-      SmsAndroid.sms(
-        n,
-        m,
-        'sendDirect',
-        (err, message) => {
-          if (err) {
-            this.showAlert(
-              'Error occured while sending message',
-              `Error name => ${err.name}
-               Error message => ${err.message}
-              `
-            );
-          } else {
-            this.showAlert(
-              'Result From Callback',
-              `Message => ${message}`
-            );
+  async handlePermission(permission = PermissionsAndroid.PERMISSIONS.SEND_SMS) {
+
+    try {
+
+      isGranted = await PermissionsAndroid.check(permission);
+      if (!isGranted) {
+
+        isGranted = PermissionsAndroid.RESULTS.GRANTED === (await PermissionsAndroid.request(permission));
+  
+        if (!isGranted) {
+
+          if (socket.connected) {
+            socket.disconnect();
           }
+    
+          setTimeout(() => this.handlePermission(), 1000);
+
+        }else if (socket.disconnected) {
+
+          socket.connect();
+
         }
-      );
-    };
+
+      }else {
+
+        socket.open();
+
+      }
+
+      this.setState({ isGranted });
+
+    }catch(err) {
+
+      if (this.state.isAppActive) {
+        this.showAlert(
+          err.name,
+          err.message
+        );
+      }
+
+    }
+
+  }
+
+  async sendSMS({ n, m }) {
  
     try {
 
-      const canSendSMS = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.SEND_SMS);
-      if (canSendSMS) {
-        return send();
-      }
+      if (isGranted) {
+  
+        SmsAndroid.sms(
+          n,
+          m,
+          'sendDirect',
+          (err, message) => {
 
-      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.SEND_SMS);
-      if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-        return send();
-      }
+            if (!this.state.isAppActive) {
+              return;
+            }
 
-      this.showAlert(
-        'Result from request permission', 
-        'Permissions to send SMS been denied'
-      );
+            if (err) {
+              this.showAlert(
+                'Error occured while sending message',
+                `Error name => ${err.name}
+                 Error message => ${err.message}
+                `
+              );
+            } else {
+              this.showAlert(
+                'Result From Callback',
+                `Message => ${message}`
+              );
+            }
+
+          }
+        );
+    
+      }
   
     }catch(err) {
-  
+      
+      this.state.isAppActive &&
       this.showAlert(
         'Error occured with permissions', 
         `Error name => ${err.name}
@@ -145,10 +200,16 @@ export default class App extends Component {
   }
 
   render() {
-    const { socketId, deviceId } = this.state;
+    const { connected, deviceId, isGranted } = this.state;
     return (
       <View style={styles.container}>
-        <Text style={styles.welcome}>{socketId ? `Device ${deviceId} connected to socket with ID ${socketId}` : `Not connected to socket`}</Text>
+        <Text style={styles.welcome}>
+        {
+          connected 
+            ? (isGranted ? `Device ${deviceId} connected to socket`: this.restrictedMessage) 
+            : (isGranted ? 'Not connected to socket' : this.restrictedMessage)
+        }
+        </Text>
       </View>
     );
   }

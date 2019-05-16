@@ -9,6 +9,7 @@
   "dependencies": {
     "react": "16.8.3",
     "react-native": "0.59.8",
+    "react-native-background-job": "^2.2.0",
     "react-native-device-info": "^1.6.2",
     "react-native-sms-android": "^0.4.1",
     "socket.io-client": "2.1.1"
