@@ -46,7 +46,7 @@ export default class App extends Component {
     BackgroundJob.schedule(JOB_DEFAULT_SETTINGS);
 
     AppState.addEventListener('change', this.handleAppStateChange);
-  
+
     socket = SocketIOClient(ENDPOINT, {
       query: this.queryParams,
       autoConnect: false,
@@ -63,7 +63,7 @@ export default class App extends Component {
       if (isGranted) {
         socket.connect();
       }
-  
+
     });
 
     socket.on('connect', () => this.setState({ connected: true }));
@@ -115,22 +115,22 @@ export default class App extends Component {
       if (!isGranted) {
 
         isGranted = PermissionsAndroid.RESULTS.GRANTED === (await PermissionsAndroid.request(permission));
-  
+
         if (!isGranted) {
 
           if (socket.connected) {
             socket.disconnect();
           }
-    
+
           setTimeout(() => this.handlePermission(), 1000);
 
-        }else if (socket.disconnected) {
+        } else if (socket.disconnected) {
 
           socket.connect();
 
         }
 
-      }else {
+      } else {
 
         socket.open();
 
@@ -138,7 +138,7 @@ export default class App extends Component {
 
       this.setState({ isGranted });
 
-    }catch(err) {
+    } catch (err) {
 
       if (this.state.isAppActive) {
         this.showAlert(
@@ -151,52 +151,52 @@ export default class App extends Component {
 
   }
 
-  async sendSMS({ n, m }) {
- 
+  sendSMS({ n, m }) {
+
     try {
 
-      if (isGranted) {
-  
-        SmsAndroid.sms(
-          n,
-          m,
-          'sendDirect',
-          (err, message) => {
+      if (!isGranted) {
+        throw { name: 'PermissionError', message: 'Permission to send SMS required' };
+      }
 
-            if (!this.state.isAppActive) {
-              return;
-            }
+      SmsAndroid.sms(
+        n,
+        m,
+        'sendDirect',
+        (err, message) => {
 
-            if (err) {
-              this.showAlert(
-                'Error occured while sending message',
-                `Error name => ${err.name}
+          if (!this.state.isAppActive) {
+            return;
+          }
+
+          if (err) {
+            this.showAlert(
+              'Error occured while sending message',
+              `Error name => ${err.name}
                  Error message => ${err.message}
                 `
-              );
-            } else {
-              this.showAlert(
-                'Result From Callback',
-                `Message => ${message}`
-              );
-            }
-
+            );
+          } else {
+            this.showAlert(
+              'Result From Callback',
+              `Message => ${message}`
+            );
           }
-        );
-    
-      }
-  
-    }catch(err) {
-      
-      this.state.isAppActive &&
-      this.showAlert(
-        'Error occured with permissions', 
-        `Error name => ${err.name}
-         Error message => ${err.message}`
+
+        }
       );
-  
+
+    } catch (err) {
+
+      this.state.isAppActive &&
+        this.showAlert(
+          'Error occured with permissions',
+          `Error name => ${err.name}
+         Error message => ${err.message}`
+        );
+
     }
-    
+
   }
 
   render() {
@@ -204,11 +204,11 @@ export default class App extends Component {
     return (
       <View style={styles.container}>
         <Text style={styles.welcome}>
-        {
-          connected 
-            ? (isGranted ? `Device ${deviceId} connected to socket`: this.restrictedMessage) 
-            : (isGranted ? 'Not connected to socket' : this.restrictedMessage)
-        }
+          {
+            connected
+              ? (isGranted ? `Device ${deviceId} connected to socket` : this.restrictedMessage)
+              : (isGranted ? 'Not connected to socket' : this.restrictedMessage)
+          }
         </Text>
       </View>
     );
